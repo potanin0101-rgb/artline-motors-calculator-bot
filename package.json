@@ -1,0 +1,13 @@
+{
+  "name": "artline-motors-calculator-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test/calculator.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
