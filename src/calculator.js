@@ -243,7 +243,7 @@ function calculateImport(input, rates, config = DEFAULT_CONFIG) {
 
   return {
     input: { ...input, usInlandUsd, oceanUsd },
-    rates: { usdRub, eurRub },
+    rates: { ...rates, usdRub, eurRub },
     usd: {
       carPriceUsd: input.carPriceUsd,
       dealerBuyoutUsd,
