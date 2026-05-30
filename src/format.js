@@ -30,7 +30,18 @@ function formatResult(result) {
   lines.push("");
   lines.push(`Город: ${destinationName(result.input.destination)}`);
   lines.push(`Возраст авто: ${ageText(result.duty.ageMonths)}`);
-  lines.push(`Курс: USD ${numberRu(result.rates.usdRub)} ₽, EUR ${numberRu(result.rates.eurRub)} ₽`);
+  const rateDate = result.rates.date ? ` на ${result.rates.date}` : "";
+  const markupPercent = result.rates.markupPercent || 0;
+  if (result.rates.baseUsdRub && result.rates.baseEurRub && markupPercent > 0) {
+    lines.push(
+      `Курс ЦБ РФ${rateDate} + ${markupPercent}%: USD ${numberRu(result.rates.usdRub)} ₽, EUR ${numberRu(result.rates.eurRub)} ₽`
+    );
+    lines.push(
+      `База ЦБ: USD ${numberRu(result.rates.baseUsdRub)} ₽, EUR ${numberRu(result.rates.baseEurRub)} ₽`
+    );
+  } else {
+    lines.push(`Курс: USD ${numberRu(result.rates.usdRub)} ₽, EUR ${numberRu(result.rates.eurRub)} ₽`);
+  }
   lines.push("");
   lines.push("Расходы в USD:");
   lines.push(`Авто: ${moneyUsd(result.usd.carPriceUsd)}`);

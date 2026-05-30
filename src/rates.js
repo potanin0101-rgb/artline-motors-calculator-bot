@@ -1,11 +1,30 @@
+const RATE_MARKUP_FACTOR = 1.05;
+
+function getValuteBlock(xml, charCode) {
+  const blocks = xml.match(/<Valute\b[^>]*>[\s\S]*?<\/Valute>/gi) || [];
+  return blocks.find((block) => {
+    const code = block.match(/<CharCode>([^<]+)<\/CharCode>/i)?.[1];
+    return code === charCode;
+  }) || null;
+}
+
+function parseCbrDate(xml) {
+  return xml.match(/<ValCurs\b[^>]*Date="([^"]+)"/i)?.[1] || null;
+}
+
 function parseCbrRate(xml, charCode) {
-  const blockRe = new RegExp(`<Valute[^>]*>[^]*?<CharCode>${charCode}</CharCode>[^]*?</Valute>`, "i");
-  const block = xml.match(blockRe)?.[0];
+  const block = getValuteBlock(xml, charCode);
   if (!block) return null;
+
   const nominal = Number(block.match(/<Nominal>(\d+)<\/Nominal>/i)?.[1] || 1);
   const valueText = block.match(/<Value>([^<]+)<\/Value>/i)?.[1];
   if (!valueText) return null;
+
   return Number(valueText.replace(",", ".")) / nominal;
+}
+
+function applyRateMarkup(rate) {
+  return Number((rate * RATE_MARKUP_FACTOR).toFixed(4));
 }
 
 async function fetchCbrRates() {
@@ -18,27 +37,39 @@ async function fetchCbrRates() {
     });
     if (!response.ok) throw new Error(`CBR HTTP ${response.status}`);
     const xml = await response.text();
-    const usdRub = parseCbrRate(xml, "USD");
-    const eurRub = parseCbrRate(xml, "EUR");
-    if (!usdRub || !eurRub) throw new Error("Не удалось прочитать курсы ЦБ.");
-    return { usdRub, eurRub, source: "CBR" };
+    const date = parseCbrDate(xml);
+    const baseUsdRub = parseCbrRate(xml, "USD");
+    const baseEurRub = parseCbrRate(xml, "EUR");
+    if (!baseUsdRub || !baseEurRub) throw new Error("Не удалось прочитать курсы ЦБ.");
+    return {
+      usdRub: applyRateMarkup(baseUsdRub),
+      eurRub: applyRateMarkup(baseEurRub),
+      baseUsdRub,
+      baseEurRub,
+      source: "CBR",
+      date,
+      markupPercent: 5
+    };
   } finally {
     clearTimeout(timeout);
   }
 }
 
 async function getRates() {
-  const fallbackUsd = Number(process.env.USD_RUB);
-  const fallbackEur = Number(process.env.EUR_RUB);
+  const baseFallbackUsd = Number(process.env.USD_RUB);
+  const baseFallbackEur = Number(process.env.EUR_RUB);
 
   try {
     return await fetchCbrRates();
   } catch (error) {
-    if (fallbackUsd && fallbackEur) {
+    if (baseFallbackUsd && baseFallbackEur) {
       return {
-        usdRub: fallbackUsd,
-        eurRub: fallbackEur,
+        usdRub: applyRateMarkup(baseFallbackUsd),
+        eurRub: applyRateMarkup(baseFallbackEur),
+        baseUsdRub: baseFallbackUsd,
+        baseEurRub: baseFallbackEur,
         source: "ENV",
+        markupPercent: 5,
         warning: `Курс ЦБ недоступен, использую fallback: ${error.message}`
       };
     }
@@ -46,4 +77,10 @@ async function getRates() {
   }
 }
 
-module.exports = { getRates, fetchCbrRates, parseCbrRate };
+module.exports = {
+  RATE_MARKUP_FACTOR,
+  applyRateMarkup,
+  getRates,
+  fetchCbrRates,
+  parseCbrRate
+};
