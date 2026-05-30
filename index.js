@@ -8,6 +8,7 @@ loadEnvFile();
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
+const IMPORT_STEP = "edmundsUrl";
 
 const sessions = new Map();
 
@@ -63,8 +64,22 @@ function currentStepIndex(session) {
 }
 
 function back(session) {
+  if (session.step === IMPORT_STEP) {
+    session.step = null;
+    session.option = null;
+    session.data = {};
+    session.vehicle = null;
+    return;
+  }
+
   const index = currentStepIndex(session);
   if (index <= 0) {
+    if (session.option === "edmunds_import") {
+      session.step = IMPORT_STEP;
+      session.data = {};
+      session.vehicle = null;
+      return;
+    }
     session.step = null;
     session.option = null;
     return;
@@ -145,14 +160,24 @@ async function ask(chatId, session) {
   if (!session.option) {
     await telegram("sendMessage", {
       chat_id: chatId,
-      text: "Выбери вариант покупки. Сейчас в MVP активен расчет покупки у дилера в США.",
+      text: "Выбери, как считать авто: вручную по дилеру или по ссылке Edmunds.",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Дилер США", callback_data: "option:us_dealer" }],
+          [{ text: "Ручной просчет от дилера", callback_data: "option:dealer_manual" }],
+          [{ text: "Просчет по ссылке Edmunds", callback_data: "option:edmunds_import" }],
           [{ text: "Аукцион США - добавим позже", callback_data: "option:soon:auction_us" }],
           [{ text: "Китай - добавим позже", callback_data: "option:soon:china" }]
         ]
       }
+    });
+    return;
+  }
+
+  if (session.step === IMPORT_STEP) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "Отправь ссылку на VIN-страницу Edmunds.\nНапример: https://www.edmunds.com/honda/hr-v/2024/vin/3CZRZ2H35RM714945/",
+      reply_markup: baseKeyboard(true)
     });
     return;
   }
@@ -226,7 +251,7 @@ async function handleMessage(message) {
   if (text === "/help") {
     await telegram("sendMessage", {
       chat_id: chatId,
-      text: "Я считаю стоимость авто из США у дилера до Ростова-на-Дону или Москвы. Можно идти по шагам через /new или просто прислать ссылку на Edmunds."
+      text: "Я умею считать авто двумя способами: ручной просчет от дилера и импорт по ссылке Edmunds. Можно выбрать ветку через /new или сразу прислать Edmunds VIN-ссылку."
     });
     return;
   }
@@ -239,7 +264,7 @@ async function handleMessage(message) {
 
     try {
       const imported = await importListingFromUrl(text);
-      session.option = "us_dealer";
+      session.option = "edmunds_import";
       session.data = {
         ...imported.data
       };
@@ -262,6 +287,22 @@ async function handleMessage(message) {
         text: `Не получилось разобрать ссылку: ${error.message}`
       });
     }
+    return;
+  }
+
+  if (/^https?:\/\//i.test(text)) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "Ссылки сейчас поддерживаю только с Edmunds VIN-страниц. Для других сайтов пока используй ручной просчет."
+    });
+    return;
+  }
+
+  if (session.option === "edmunds_import" && session.step === IMPORT_STEP) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "Жду именно ссылку на Edmunds с VIN-страницей. Если хочешь ручной просчет, нажми «Назад» и выбери ручную ветку."
+    });
     return;
   }
 
@@ -318,11 +359,20 @@ async function handleCallback(callbackQuery) {
     return;
   }
 
-  if (data === "option:us_dealer") {
-    session.option = "us_dealer";
+  if (data === "option:dealer_manual") {
+    session.option = "dealer_manual";
     session.vehicle = null;
     session.data = {};
     advanceToNextMissingStep(session);
+    await ask(chatId, session);
+    return;
+  }
+
+  if (data === "option:edmunds_import") {
+    session.option = "edmunds_import";
+    session.vehicle = null;
+    session.data = {};
+    session.step = IMPORT_STEP;
     await ask(chatId, session);
     return;
   }
