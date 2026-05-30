@@ -1,6 +1,7 @@
 const { loadEnvFile } = require("./src/env");
 const { calculateImport } = require("./src/calculator");
 const { formatResult, moneyUsd } = require("./src/format");
+const { formatImportedVehicle, importListingFromUrl, isSupportedListingUrl } = require("./src/listing");
 const { getRates } = require("./src/rates");
 
 loadEnvFile();
@@ -46,13 +47,13 @@ function parseAmount(text) {
 
 function getSession(chatId) {
   if (!sessions.has(chatId)) {
-    sessions.set(chatId, { option: null, step: null, data: {} });
+    sessions.set(chatId, { option: null, step: null, data: {}, vehicle: null });
   }
   return sessions.get(chatId);
 }
 
 function resetSession(chatId) {
-  const session = { option: null, step: null, data: {} };
+  const session = { option: null, step: null, data: {}, vehicle: null };
   sessions.set(chatId, session);
   return session;
 }
@@ -71,6 +72,15 @@ function back(session) {
   const previousStep = STEPS[index - 1];
   delete session.data[previousStep];
   session.step = previousStep;
+}
+
+function firstMissingStep(data) {
+  return STEPS.find((step) => data[step] === undefined || data[step] === null);
+}
+
+function advanceToNextMissingStep(session) {
+  session.step = firstMissingStep(session.data) || null;
+  return session.step;
 }
 
 async function telegram(method, payload) {
@@ -185,7 +195,8 @@ async function completeCalculation(chatId, session) {
     usInlandUsd: session.data.usInlandUsd,
     oceanUsd: session.data.oceanUsd,
     commissionRub: session.data.commissionRub,
-    destination: session.data.destination
+    destination: session.data.destination,
+    vehicle: session.vehicle
   }, rates);
 
   const warning = rates.warning ? `\n\nВажно: ${rates.warning}` : "";
@@ -215,8 +226,42 @@ async function handleMessage(message) {
   if (text === "/help") {
     await telegram("sendMessage", {
       chat_id: chatId,
-      text: "Я считаю стоимость авто из США у дилера до Ростова-на-Дону или Москвы. Нажми /new, чтобы начать новый расчет."
+      text: "Я считаю стоимость авто из США у дилера до Ростова-на-Дону или Москвы. Можно идти по шагам через /new или просто прислать ссылку на Edmunds."
     });
+    return;
+  }
+
+  if (isSupportedListingUrl(text)) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "Смотрю объявление и вытягиваю данные по машине."
+    });
+
+    try {
+      const imported = await importListingFromUrl(text);
+      session.option = "us_dealer";
+      session.data = {
+        ...imported.data
+      };
+      session.vehicle = imported.vehicle;
+      advanceToNextMissingStep(session);
+
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        text: formatImportedVehicle(imported.vehicle)
+      });
+
+      if (session.step) {
+        await ask(chatId, session);
+      } else {
+        await completeCalculation(chatId, session);
+      }
+    } catch (error) {
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        text: `Не получилось разобрать ссылку: ${error.message}`
+      });
+    }
     return;
   }
 
@@ -246,9 +291,12 @@ async function handleMessage(message) {
   }
 
   session.data[session.step] = Math.round(value);
-  const nextIndex = currentStepIndex(session) + 1;
-  session.step = STEPS[nextIndex];
-  await ask(chatId, session);
+  if (advanceToNextMissingStep(session)) {
+    await ask(chatId, session);
+    return;
+  }
+
+  await completeCalculation(chatId, session);
 }
 
 async function handleCallback(callbackQuery) {
@@ -272,8 +320,9 @@ async function handleCallback(callbackQuery) {
 
   if (data === "option:us_dealer") {
     session.option = "us_dealer";
-    session.step = "carPriceUsd";
+    session.vehicle = null;
     session.data = {};
+    advanceToNextMissingStep(session);
     await ask(chatId, session);
     return;
   }
@@ -290,12 +339,16 @@ async function handleCallback(callbackQuery) {
     const [, step, rawValue] = data.split(":");
     const value = Number(rawValue);
     session.data[step] = value;
-    session.step = STEPS[STEPS.indexOf(step) + 1];
     await telegram("sendMessage", {
       chat_id: chatId,
       text: `Принял: ${moneyUsd(value)}`
     });
-    await ask(chatId, session);
+    if (advanceToNextMissingStep(session)) {
+      await ask(chatId, session);
+      return;
+    }
+
+    await completeCalculation(chatId, session);
     return;
   }
 
