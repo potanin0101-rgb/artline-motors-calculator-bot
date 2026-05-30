@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { calculateImport, getDutyEur, getUtilizationFee, getCustomsClearanceFeeRub } = require("../src/calculator");
 const { formatResult } = require("../src/format");
-const { buildPrefilledCalculationData, mergeVehicleData, parseEdmundsVehicleFromHtml } = require("../src/listing");
+const { buildPrefilledCalculationData, buildVehicleTitle, mergeVehicleData, parseEdmundsVehicleFromHtml } = require("../src/listing");
 const { applyRateMarkup, parseCbrRate, RATE_MARKUP_FACTOR } = require("../src/rates");
 
 const rates = { usdRub: 92, eurRub: 100 };
@@ -201,8 +201,9 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
   assert.equal(draft.engineCc, 2000);
   assert.equal(draft.horsepower, 158);
   assert.equal(draft.productionYear, 2024);
-  assert.equal(draft.usInlandUsd, 1000);
-  assert.equal(draft.oceanUsd, 6500);
+  assert.equal("usInlandUsd" in draft, false);
+  assert.equal("oceanUsd" in draft, false);
+  assert.equal(buildVehicleTitle(mergedVehicle), "2024 Honda HR-V LX");
 }
 
 {
@@ -222,7 +223,10 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
       mileage: 40067,
       engineLiters: 2,
       horsepower: 158,
-      drivetrain: "4WD/4-Wheel Drive/4x4"
+      fuelType: "Gasoline",
+      drivetrain: "4WD/4-Wheel Drive/4x4",
+      trim: "LX",
+      transmission: "Continuously Variable Transmission (CVT)"
     },
     asOf
   }, detailedRates);
@@ -231,6 +235,9 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
   assert.match(text, /Авто: 2024 Honda HR-V LX/);
   assert.match(text, /VIN: 3CZRZ2H35RM714945/);
   assert.match(text, /Пробег: 40[\s\u00A0]067 mi/);
+  assert.match(text, /Характеристики: 2\.0L, 158 л\.с\., Gasoline, 4WD\/4-Wheel Drive\/4x4/);
+  assert.match(text, /Комплектация: LX/);
+  assert.match(text, /Трансмиссия: Continuously Variable Transmission \(CVT\)/);
   assert.match(text, /Курс ЦБ РФ на 30\.05\.2026 \+ 5%/);
 }
 
