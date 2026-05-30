@@ -29,21 +29,35 @@ function vehicleHeader(vehicle) {
   return vehicle.title || [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
 }
 
+function vehicleSummaryLines(vehicle) {
+  if (!vehicle) return [];
+
+  const lines = [];
+  const header = vehicleHeader(vehicle);
+  if (header) lines.push(`Авто: ${header}`);
+  if (vehicle.vin) lines.push(`VIN: ${vehicle.vin}`);
+  if (vehicle.mileage) lines.push(`Пробег: ${Math.round(vehicle.mileage).toLocaleString("ru-RU")} mi`);
+
+  const vehicleSpec = [];
+  if (vehicle.engineLiters) vehicleSpec.push(`${Number(vehicle.engineLiters).toFixed(1)}L`);
+  if (vehicle.horsepower) vehicleSpec.push(`${Math.round(vehicle.horsepower)} л.с.`);
+  if (vehicle.fuelType) vehicleSpec.push(vehicle.fuelType);
+  if (vehicle.drivetrain) vehicleSpec.push(vehicle.drivetrain);
+  if (vehicleSpec.length) lines.push(`Характеристики: ${vehicleSpec.join(", ")}`);
+
+  if (vehicle.trim) lines.push(`Комплектация: ${vehicle.trim}`);
+  if (vehicle.transmission) lines.push(`Трансмиссия: ${vehicle.transmission}`);
+
+  return lines;
+}
+
 function formatResult(result) {
   const lines = [];
   lines.push(`Итог до города: ${moneyRub(result.totalRub)}`);
   lines.push("");
   lines.push(`Город: ${destinationName(result.input.destination)}`);
   const vehicle = result.input.vehicle;
-  const header = vehicleHeader(vehicle);
-  if (header) lines.push(`Авто: ${header}`);
-  if (vehicle?.vin) lines.push(`VIN: ${vehicle.vin}`);
-  if (vehicle?.mileage) lines.push(`Пробег: ${Math.round(vehicle.mileage).toLocaleString("ru-RU")} mi`);
-  const vehicleSpec = [];
-  if (vehicle?.engineLiters) vehicleSpec.push(`${Number(vehicle.engineLiters).toFixed(1)}L`);
-  if (vehicle?.horsepower) vehicleSpec.push(`${Math.round(vehicle.horsepower)} л.с.`);
-  if (vehicle?.drivetrain) vehicleSpec.push(vehicle.drivetrain);
-  if (vehicleSpec.length) lines.push(`Характеристики: ${vehicleSpec.join(", ")}`);
+  lines.push(...vehicleSummaryLines(vehicle));
   lines.push(`Возраст авто: ${ageText(result.duty.ageMonths)}`);
   const rateDate = result.rates.date ? ` на ${result.rates.date}` : "";
   const markupPercent = result.rates.markupPercent || 0;
@@ -83,5 +97,6 @@ module.exports = {
   moneyUsd,
   numberRu,
   destinationName,
-  formatResult
+  formatResult,
+  vehicleHeader
 };
