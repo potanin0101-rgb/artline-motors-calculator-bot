@@ -1,6 +1,3 @@
-const DEFAULT_US_INLAND_USD = 1000;
-const DEFAULT_OCEAN_USD = 6500;
-
 function parseUrl(text) {
   try {
     return new URL(String(text).trim());
@@ -216,8 +213,11 @@ function mergeVehicleData(listingVehicle, vinVehicle = null) {
 }
 
 function buildVehicleTitle(vehicle) {
-  if (vehicle.title) return vehicle.title;
-  return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ") || "Автомобиль из объявления";
+  const detailedTitle = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
+  if (detailedTitle && (!vehicle.title || (vehicle.trim && !vehicle.title.includes(vehicle.trim)))) {
+    return detailedTitle;
+  }
+  return vehicle.title || detailedTitle || "Автомобиль из объявления";
 }
 
 function buildPrefilledCalculationData(vehicle) {
@@ -226,10 +226,6 @@ function buildPrefilledCalculationData(vehicle) {
   if (vehicle.engineCc) data.engineCc = Math.round(vehicle.engineCc);
   if (vehicle.horsepower) data.horsepower = Math.round(vehicle.horsepower);
   if (vehicle.year) data.productionYear = Math.round(vehicle.year);
-
-  data.usInlandUsd = Number(process.env.DEFAULT_US_INLAND_USD || DEFAULT_US_INLAND_USD);
-  data.oceanUsd = Number(process.env.DEFAULT_OCEAN_USD || DEFAULT_OCEAN_USD);
-
   return data;
 }
 
@@ -267,9 +263,7 @@ function formatImportedVehicle(vehicle) {
   } else {
     lines.push("Часть данных для расчета придется уточнить вручную.");
   }
-  const defaults = buildPrefilledCalculationData(vehicle);
-  lines.push(`Доставку по США ставлю по умолчанию $${defaults.usInlandUsd}, океан $${defaults.oceanUsd}.`);
-  lines.push("Дальше уточним только недостающие поля.");
+  lines.push("Цену, если ее не удалось прочитать, а также доставку по США и океан уточним отдельными шагами.");
   return lines.join("\n");
 }
 
@@ -293,7 +287,7 @@ async function importEdmundsListing(url) {
       const html = await response.text();
       listingVehicle = parseEdmundsVehicleFromHtml(html, url);
     } else {
-      importWarning = `Edmunds не отдал часть данных со страницы (${response.status}). Продолжаю по VIN и URL.`;
+      importWarning = `Edmunds заблокировал прямой запрос бота и вернул ${response.status} (Akamai). Поэтому цену и пробег мог не отдать, продолжаю по VIN и URL.`;
     }
   } finally {
     clearTimeout(timeout);
