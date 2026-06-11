@@ -1,7 +1,15 @@
 const assert = require("node:assert/strict");
 const { calculateImport, getDutyEur, getUtilizationFee, getCustomsClearanceFeeRub } = require("../src/calculator");
 const { formatResult } = require("../src/format");
-const { buildPrefilledCalculationData, buildVehicleTitle, mergeVehicleData, parseEdmundsVehicleFromHtml } = require("../src/listing");
+const {
+  buildPrefilledCalculationData,
+  buildVehicleTitle,
+  detectEdmundsAccessDenied,
+  extractEdmundsPhotoUrls,
+  getEdmundsFetchMode,
+  mergeVehicleData,
+  parseEdmundsVehicleFromHtml
+} = require("../src/listing");
 const { applyRateMarkup, parseCbrRate, RATE_MARKUP_FACTOR } = require("../src/rates");
 
 const rates = { usdRub: 92, eurRub: 100 };
@@ -134,9 +142,50 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
 }
 
 {
+  assert.equal(getEdmundsFetchMode({}), "auto");
+  assert.equal(getEdmundsFetchMode({ fetchMode: "fetch" }), "fetch");
+}
+
+{
   const html = `<!DOCTYPE html>
   <html>
     <head>
+      <link rel="preload" href="https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-600x400.jpg" as="image" />
+      <link rel="preload" href="https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-960x.jpg" as="image" />
+      <link rel="preload" href="/assets/m/for-sale/76-3czrz2h35rm714945/img-2-960x.jpg" as="image" />
+      <link rel="preload" href="/assets/m/for-sale/76-3czrz2h35rm714945/img-3-960x.jpg" as="image" />
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "Vehicle",
+              "name": "2024 Honda HR-V LX",
+              "image": "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-600x400.jpg"
+            }
+          ]
+        }
+      </script>
+    </head>
+  </html>`;
+
+  const photos = extractEdmundsPhotoUrls(html, {
+    image: "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-600x400.jpg"
+  });
+
+  assert.deepEqual(photos, [
+    "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-960x.jpg",
+    "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-2-960x.jpg",
+    "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-3-960x.jpg"
+  ]);
+}
+
+{
+  const html = `<!DOCTYPE html>
+  <html>
+    <head>
+      <link rel="preload" href="https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-960x.jpg" as="image" />
+      <link rel="preload" href="https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-2-960x.jpg" as="image" />
       <script type="application/ld+json">
         {
           "@context": "https://schema.org",
@@ -176,6 +225,10 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
   assert.equal(listingVehicle.mileage, 40067);
   assert.equal(listingVehicle.engineCc, 2000);
   assert.equal(listingVehicle.horsepower, 158);
+  assert.deepEqual(listingVehicle.photos, [
+    "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-1-960x.jpg",
+    "https://www.edmunds.com/assets/m/for-sale/76-3czrz2h35rm714945/img-2-960x.jpg"
+  ]);
 
   const mergedVehicle = mergeVehicleData(listingVehicle, {
     vin: "3CZRZ2H35RM714945",
@@ -204,6 +257,16 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
   assert.equal("usInlandUsd" in draft, false);
   assert.equal("oceanUsd" in draft, false);
   assert.equal(buildVehicleTitle(mergedVehicle), "2024 Honda HR-V LX");
+}
+
+{
+  const deniedHtml = `<!DOCTYPE html><html><head><title>403 - Access Denied | Edmunds</title></head><body>
+    <h1>Access Denied</h1>
+    <p>Reference ID 0.e837c517.1780930562.8ea08ec5</p>
+  </body></html>`;
+
+  assert.equal(detectEdmundsAccessDenied(deniedHtml, "403 - Access Denied | Edmunds"), true);
+  assert.equal(detectEdmundsAccessDenied("<html><body><script type=\"application/ld+json\">{\"@type\":\"Vehicle\"}</script></body></html>", "Vehicle page"), false);
 }
 
 {
