@@ -68,6 +68,66 @@ function flattenGraphEntries(value) {
   return [value];
 }
 
+function normalizeEdmundsPhotoUrl(url) {
+  if (!url) return null;
+  const normalized = String(url).trim();
+  if (!normalized) return null;
+
+  if (normalized.startsWith("/assets/")) {
+    return `https://www.edmunds.com${normalized}`;
+  }
+
+  if (/^https:\/\/www\.edmunds\.com\/assets\//i.test(normalized)) {
+    return normalized;
+  }
+
+  return null;
+}
+
+function getPhotoKey(url) {
+  const normalized = normalizeEdmundsPhotoUrl(url);
+  if (!normalized) return null;
+  return normalized.replace(/-\d+x\d*(?=\.(?:jpg|jpeg|png|webp)$)/i, "");
+}
+
+function getPhotoScore(url) {
+  const match = String(url).match(/-(\d+)x(\d*)(?=\.(?:jpg|jpeg|png|webp)$)/i);
+  if (!match) return 0;
+  const width = Number(match[1] || 0);
+  const height = Number(match[2] || 0);
+  return height > 0 ? width * height : width * width;
+}
+
+function pushUniquePhoto(photoMap, url) {
+  const normalized = normalizeEdmundsPhotoUrl(url);
+  if (!normalized) return;
+
+  const key = getPhotoKey(normalized) || normalized;
+  const current = photoMap.get(key);
+  if (!current || getPhotoScore(normalized) > getPhotoScore(current)) {
+    photoMap.set(key, normalized);
+  }
+}
+
+function extractEdmundsPhotoUrls(html, vehicle = null, limit = 10) {
+  const photoMap = new Map();
+
+  const vehicleImages = vehicle?.image;
+  if (Array.isArray(vehicleImages)) {
+    for (const image of vehicleImages) pushUniquePhoto(photoMap, image);
+  } else if (vehicleImages) {
+    pushUniquePhoto(photoMap, vehicleImages);
+  }
+
+  const htmlMatches = html.match(/(?:https:\/\/www\.edmunds\.com)?\/assets\/m\/for-sale\/[^"'`\s<>()]+\.(?:jpg|jpeg|png|webp)/gi) || [];
+
+  for (const match of htmlMatches) {
+    pushUniquePhoto(photoMap, match);
+  }
+
+  return Array.from(photoMap.values()).slice(0, limit);
+}
+
 function parseEdmundsVehicleFromHtml(html, pageUrl = null) {
   const entries = extractJsonLdObjects(html).flatMap(flattenGraphEntries);
   const vehicle = entries.find((entry) => entry?.["@type"] === "Vehicle");
@@ -106,7 +166,8 @@ function parseEdmundsVehicleFromHtml(html, pageUrl = null) {
     engineCc,
     exteriorColor: vehicle.color || null,
     interiorColor: vehicle.vehicleInteriorColor || null,
-    vehicleConfiguration: vehicle.vehicleConfiguration || null
+    vehicleConfiguration: vehicle.vehicleConfiguration || null,
+    photos: extractEdmundsPhotoUrls(html, vehicle)
   };
 }
 
@@ -143,7 +204,8 @@ function parseEdmundsVehicleFromUrl(urlText) {
     engineCc: null,
     exteriorColor: null,
     interiorColor: null,
-    vehicleConfiguration: null
+    vehicleConfiguration: null,
+    photos: []
   };
 }
 
@@ -208,7 +270,8 @@ function mergeVehicleData(listingVehicle, vinVehicle = null) {
     fuelType: vinVehicle.fuelType || base.fuelType,
     drivetrain: vinVehicle.drivetrain || base.drivetrain,
     transmission: vinVehicle.transmission || base.transmission,
-    bodyType: vinVehicle.bodyType || base.bodyType
+    bodyType: vinVehicle.bodyType || base.bodyType,
+    photos: Array.isArray(base.photos) ? base.photos : []
   };
 }
 
@@ -248,6 +311,9 @@ function formatImportedVehicle(vehicle) {
   if (vehicle.exteriorColor || vehicle.interiorColor) {
     lines.push(`Цвета: ${[vehicle.exteriorColor, vehicle.interiorColor].filter(Boolean).join(" / ")}`);
   }
+  if (Array.isArray(vehicle.photos) && vehicle.photos.length) {
+    lines.push(`Фото в объявлении: ${vehicle.photos.length} шт.`);
+  }
   if (vehicle.importWarning) {
     lines.push(`Важно: ${vehicle.importWarning}`);
   }
@@ -267,10 +333,40 @@ function formatImportedVehicle(vehicle) {
   return lines.join("\n");
 }
 
-async function importEdmundsListing(url) {
-  let listingVehicle = null;
-  let importWarning = null;
+function parseBooleanEnv(value, defaultValue = false) {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
 
+function getPlaywrightLaunchOptions(options = {}) {
+  const browserName = options.browserName || process.env.PLAYWRIGHT_BROWSER || "chromium";
+  const headless = options.headless ?? parseBooleanEnv(process.env.PLAYWRIGHT_HEADLESS, true);
+  const channel = options.channel || process.env.PLAYWRIGHT_CHANNEL || undefined;
+
+  return {
+    browserName,
+    headless,
+    channel
+  };
+}
+
+function detectEdmundsAccessDenied(html, pageTitle = "") {
+  const title = String(pageTitle || "").toLowerCase();
+  const body = String(html || "").toLowerCase();
+
+  return (
+    title.includes("access denied") ||
+    body.includes("access denied") ||
+    body.includes("reference id") ||
+    body.includes("don't have permission to access this page")
+  );
+}
+
+function getEdmundsFetchMode(options = {}) {
+  return options.fetchMode || process.env.EDMUNDS_FETCH_MODE || "auto";
+}
+
+async function fetchHtmlWithFetch(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
@@ -283,14 +379,105 @@ async function importEdmundsListing(url) {
       }
     });
 
-    if (response.ok) {
-      const html = await response.text();
-      listingVehicle = parseEdmundsVehicleFromHtml(html, url);
-    } else {
-      importWarning = `Edmunds заблокировал прямой запрос бота и вернул ${response.status} (Akamai). Поэтому цену и пробег мог не отдать, продолжаю по VIN и URL.`;
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
+
+    const html = await response.text();
+    if (detectEdmundsAccessDenied(html)) {
+      const error = new Error("Access Denied");
+      error.status = response.status;
+      throw error;
+    }
+
+    return html;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function fetchHtmlWithPlaywright(url, options = {}) {
+  let playwright;
+  try {
+    playwright = require("playwright");
+  } catch {
+    throw new Error("Playwright не установлен. Выполни: npm install && npx playwright install chromium");
+  }
+
+  const { browserName, headless, channel } = getPlaywrightLaunchOptions(options);
+  const browserType = playwright[browserName];
+  if (!browserType) {
+    throw new Error(`Неизвестный Playwright browser: ${browserName}. Используй chromium, firefox или webkit.`);
+  }
+
+  const timeoutMs = Number(options.timeoutMs || process.env.PLAYWRIGHT_TIMEOUT_MS || 20000);
+  const browser = await browserType.launch({
+    headless,
+    ...(channel ? { channel } : {})
+  });
+
+  // По официальному паттерну Playwright создаем отдельный non-persistent context.
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    locale: "en-US",
+    timezoneId: "America/New_York",
+    viewport: { width: 1440, height: 1000 }
+  });
+
+  try {
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
+    const html = await page.content();
+    const title = await page.title();
+
+    if (detectEdmundsAccessDenied(html, title)) {
+      throw new Error(`Playwright получил страницу блокировки: ${title || "Access Denied"}`);
+    }
+
+    return html;
+  } finally {
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+}
+
+async function loadEdmundsHtml(url, options = {}) {
+  const mode = getEdmundsFetchMode(options);
+
+  if (mode === "playwright") {
+    return fetchHtmlWithPlaywright(url, options);
+  }
+
+  if (mode === "auto") {
+    try {
+      return await fetchHtmlWithFetch(url);
+    } catch {
+      return fetchHtmlWithPlaywright(url, options);
+    }
+  }
+
+  return fetchHtmlWithFetch(url);
+}
+
+async function importEdmundsListing(url, options = {}) {
+  let listingVehicle = null;
+  let importWarning = null;
+
+  try {
+    const html = await loadEdmundsHtml(url, options);
+    listingVehicle = parseEdmundsVehicleFromHtml(html, url);
+  } catch (error) {
+    if (getEdmundsFetchMode(options) === "fetch") {
+      const statusNote = error.status ? ` ${error.status}` : "";
+      importWarning = `Edmunds заблокировал прямой запрос бота или страница не отдала HTML:${statusNote} ${error.message}. Поэтому цену и пробег мог не отдать, продолжаю по VIN и URL.`
+        .replace(/\s+/g, " ")
+        .trim();
+    } else {
+      importWarning = `Playwright не смог разобрать страницу Edmunds: ${error.message}. Поэтому цену и пробег мог не отдать, продолжаю по VIN и URL.`;
+    }
   }
 
   listingVehicle = listingVehicle || parseEdmundsVehicleFromUrl(url);
@@ -318,19 +505,24 @@ async function importEdmundsListing(url) {
   };
 }
 
-async function importListingFromUrl(text) {
+async function importListingFromUrl(text, options = {}) {
   const url = parseUrl(text);
   if (!url) throw new Error("Не похоже на ссылку.");
   if (!isSupportedListingUrl(url.href)) {
     throw new Error("Пока поддерживаю только ссылки Edmunds с VIN-страницей.");
   }
-  return importEdmundsListing(url.href);
+  return importEdmundsListing(url.href, options);
 }
 
 module.exports = {
   buildPrefilledCalculationData,
   buildVehicleTitle,
+  detectEdmundsAccessDenied,
+  extractEdmundsPhotoUrls,
+  fetchHtmlWithPlaywright,
   formatImportedVehicle,
+  getEdmundsFetchMode,
+  getPlaywrightLaunchOptions,
   importListingFromUrl,
   isSupportedListingUrl,
   mergeVehicleData,
