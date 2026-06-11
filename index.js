@@ -6,7 +6,9 @@ const { getRates } = require("./src/rates");
 
 loadEnvFile();
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_TOKEN = process.env.BOT_TOKEN
+  || process.env.TELEGRAM_BOT_TOKEN
+  || process.env.TOKEN;
 const API_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
 const IMPORT_STEP = "edmundsUrl";
 
