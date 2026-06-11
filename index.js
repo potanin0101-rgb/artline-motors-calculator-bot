@@ -1,6 +1,6 @@
 const { loadEnvFile } = require("./src/env");
 const { calculateImport } = require("./src/calculator");
-const { formatResult, moneyUsd } = require("./src/format");
+const { formatResult, moneyUsd, vehicleHeader } = require("./src/format");
 const { formatImportedVehicle, importListingFromUrl, isSupportedListingUrl } = require("./src/listing");
 const { getRates } = require("./src/rates");
 
@@ -224,6 +224,26 @@ async function completeCalculation(chatId, session) {
     vehicle: session.vehicle
   }, rates);
 
+  const photos = Array.isArray(session.vehicle?.photos) ? session.vehicle.photos.slice(0, 10) : [];
+  if (photos.length) {
+    try {
+      await telegram("sendMediaGroup", {
+        chat_id: chatId,
+        media: photos.map((photoUrl, index) => ({
+          type: "photo",
+          media: photoUrl,
+          ...(index === 0 ? { caption: `Фото из объявления: ${vehicleHeader(session.vehicle) || "Автомобиль"}` } : {})
+        }))
+      });
+    } catch (error) {
+      console.error("sendMediaGroup failed:", error);
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        text: "Фото из объявления не удалось отправить, но сам расчет ниже пришлю."
+      });
+    }
+  }
+
   const warning = rates.warning ? `\n\nВажно: ${rates.warning}` : "";
   await telegram("sendMessage", {
     chat_id: chatId,
@@ -263,7 +283,7 @@ async function handleMessage(message) {
     });
 
     try {
-      const imported = await importListingFromUrl(text);
+      const imported = await importListingFromUrl(text, { fetchMode: "auto" });
       session.option = "edmunds_import";
       session.data = {
         ...imported.data

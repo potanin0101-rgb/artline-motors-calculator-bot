@@ -50,7 +50,7 @@ npm start
 3. Указать `BOT_TOKEN` в переменных окружения Bothost или загрузить `.env`.
 4. Команда запуска: `npm start`.
 
-Бот работает через long polling, без webhook и без внешних npm-библиотек. Это проще для MVP и подходит для небольшого внутреннего калькулятора.
+Бот работает через long polling, без webhook. Базовый калькулятор остается простым, а `Playwright` подключается только для браузерной загрузки Edmunds.
 
 ## Импорт по ссылке
 
@@ -66,9 +66,73 @@ npm start
 - мощность;
 - тип топлива;
 - привод и трансмиссию.
+- до `10` фотографий из объявления.
 
 После этого бот использует логику расчета `с дилера` и спрашивает только недостающие поля для финального расчета, включая цену, доставку по США и океан, если их не удалось получить автоматически.
 Если Edmunds блокирует серверный запрос, бот продолжает по `VIN + URL`, честно пишет про ограничение и просит вручную ввести недостающие данные вроде цены, доставки по США и океана.
+Если фотографии удалось извлечь из HTML объявления, бот отправляет их перед финальным сообщением с расчетом под ключ.
+
+## Playwright Для Edmunds
+
+Для браузерной загрузки Edmunds добавлен опциональный режим `Playwright` по официальному паттерну библиотеки:
+
+- `browserType.launch()`
+- `browser.newContext()`
+- `context.newPage()`
+- `page.goto()`
+
+Это соответствует документации Playwright Library и BrowserContext:
+
+- [Playwright Library](https://playwright.dev/docs/library)
+- [BrowserContext](https://playwright.dev/docs/api/class-browsercontext)
+
+Установка:
+
+```bash
+npm install
+npx playwright install chromium
+```
+
+Режимы загрузки Edmunds:
+
+- `EDMUNDS_FETCH_MODE=fetch` — только обычный `fetch`;
+- `EDMUNDS_FETCH_MODE=playwright` — только Playwright;
+- `EDMUNDS_FETCH_MODE=auto` — сначала `fetch`, потом fallback на Playwright.
+
+По умолчанию код теперь использует `auto`: если `fetch` уже успешно получил HTML Edmunds, Playwright вообще не запускается.
+
+Полезные переменные:
+
+```env
+EDMUNDS_FETCH_MODE=auto
+PLAYWRIGHT_BROWSER=chromium
+PLAYWRIGHT_HEADLESS=true
+PLAYWRIGHT_CHANNEL=
+PLAYWRIGHT_TIMEOUT_MS=20000
+```
+
+Если локально уже установлен Google Chrome и не хочется отдельно скачивать Chromium для Playwright, можно указать:
+
+```env
+PLAYWRIGHT_BROWSER=chromium
+PLAYWRIGHT_CHANNEL=chrome
+```
+
+Тогда Playwright попробует использовать локальный Chrome по официальному параметру `channel`.
+
+Локальная проверка Playwright-импорта:
+
+```bash
+npm run test:edmunds:playwright
+```
+
+Если нужна конкретная ссылка:
+
+```bash
+EDMUNDS_TEST_URL="https://www.edmunds.com/honda/hr-v/2024/vin/3CZRZ2H35RM714945/" npm run test:edmunds:playwright
+```
+
+Важно: код теперь отдельно распознает HTML-страницу блокировки Edmunds (`Access Denied`, `Reference ID`) и не считает ее успешным импортом.
 
 ## Курсы валют
 

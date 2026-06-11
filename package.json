@@ -5,9 +5,13 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "test": "node test/calculator.test.js"
+    "test": "node test/calculator.test.js",
+    "test:edmunds:playwright": "EDMUNDS_FETCH_MODE=playwright node test/edmunds-playwright.test.js"
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
   }
 }
