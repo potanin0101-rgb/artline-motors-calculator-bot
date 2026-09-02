@@ -12,9 +12,32 @@ function isSupportedListingUrl(text) {
 }
 
 function parseNumber(value) {
-  const normalized = String(value ?? "")
-    .replace(/,/g, ".")
-    .replace(/[^\d.]/g, "");
+  const raw = String(value ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[^\d,.-]/g, "")
+    .trim();
+  if (!raw) return null;
+
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+  let normalized = raw;
+
+  if (hasComma && hasDot) {
+    const lastComma = raw.lastIndexOf(",");
+    const lastDot = raw.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      normalized = raw.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = raw.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    const fraction = raw.slice(raw.lastIndexOf(",") + 1);
+    normalized = fraction.length === 1 || fraction.length === 2
+      ? raw.replace(",", ".")
+      : raw.replace(/,/g, "");
+  }
+
+  normalized = normalized.replace(/(?!^)-/g, "");
   if (!normalized) return null;
   const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
@@ -66,6 +89,126 @@ function flattenGraphEntries(value) {
   if (Array.isArray(value)) return value.flatMap(flattenGraphEntries);
   if (Array.isArray(value["@graph"])) return flattenGraphEntries(value["@graph"]);
   return [value];
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, "/")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function cleanHtmlText(value) {
+  return decodeHtmlEntities(String(value || "").replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractElementTextByAttribute(html, attribute, attributeValue) {
+  const escapedValue = String(attributeValue).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `<([a-z][\\w:-]*)\\b[^>]*\\b${attribute}\\s*=\\s*["']${escapedValue}["'][^>]*>([\\s\\S]*?)<\\/\\1>`,
+    "i"
+  );
+  const match = String(html || "").match(pattern);
+  return match ? cleanHtmlText(match[2]) : null;
+}
+
+function extractFirstElementText(html, attributes) {
+  for (const [attribute, value] of attributes) {
+    const text = extractElementTextByAttribute(html, attribute, value);
+    if (text) return text;
+  }
+  return null;
+}
+
+function extractTagText(html, tagName) {
+  const match = String(html || "").match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"));
+  return match ? cleanHtmlText(match[1]) : null;
+}
+
+function extractMetaContent(html, property) {
+  const pattern = new RegExp(
+    `<meta\\b[^>]*(?:property|name)\\s*=\\s*["']${property}["'][^>]*\\bcontent\\s*=\\s*["']([^"']+)["'][^>]*>`,
+    "i"
+  );
+  const reversePattern = new RegExp(
+    `<meta\\b[^>]*\\bcontent\\s*=\\s*["']([^"']+)["'][^>]*(?:property|name)\\s*=\\s*["']${property}["'][^>]*>`,
+    "i"
+  );
+  const match = String(html || "").match(pattern) || String(html || "").match(reversePattern);
+  return match ? cleanHtmlText(match[1]) : null;
+}
+
+function extractEdmundsHtmlFields(html) {
+  const priceText = extractFirstElementText(html, [
+    ["data-test", "vdp-price-row"],
+    ["data-testid", "vdp-price-row"],
+    ["data-test", "vdp-price"],
+    ["data-testid", "vdp-price"]
+  ]);
+  const mileageText = extractFirstElementText(html, [
+    ["data-test", "vdp-mileage-row"],
+    ["data-testid", "vdp-mileage-row"],
+    ["data-test", "vdp-mileage"],
+    ["data-testid", "vdp-mileage"],
+    ["data-test", "vehicle-mileage"],
+    ["data-testid", "vehicle-mileage"]
+  ]);
+  const title = extractTagText(html, "h1") || extractMetaContent(html, "og:title");
+
+  return {
+    title,
+    priceUsd: parseNumber(priceText),
+    mileage: parseNumber(mileageText),
+    trim: extractFirstElementText(html, [
+      ["data-test", "vdp-trim"],
+      ["data-testid", "vdp-trim"],
+      ["data-test", "vehicle-trim"],
+      ["data-testid", "vehicle-trim"]
+    ]),
+    transmission: extractFirstElementText(html, [
+      ["data-test", "vdp-transmission"],
+      ["data-testid", "vdp-transmission"]
+    ]),
+    drivetrain: extractFirstElementText(html, [
+      ["data-test", "vdp-drivetrain"],
+      ["data-testid", "vdp-drivetrain"]
+    ]),
+    engineLiters: parseNumber(extractFirstElementText(html, [
+      ["data-test", "vdp-engine"],
+      ["data-testid", "vdp-engine"]
+    ])),
+    horsepower: parseNumber(extractFirstElementText(html, [
+      ["data-test", "vdp-horsepower"],
+      ["data-testid", "vdp-horsepower"]
+    ]))
+  };
+}
+
+function inferTrimFromTitle(title, vehicle) {
+  if (!title || !vehicle) return null;
+
+  const prefix = [vehicle.year, vehicle.make, vehicle.model]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const normalizedTitle = String(title).replace(/\s+/g, " ").trim();
+  const normalizedPrefix = prefix.toLowerCase();
+
+  if (normalizedTitle.toLowerCase().startsWith(normalizedPrefix)) {
+    const trim = normalizedTitle.slice(prefix.length).trim();
+    return trim || null;
+  }
+
+  return null;
 }
 
 function normalizeEdmundsPhotoUrl(url) {
@@ -131,42 +274,52 @@ function extractEdmundsPhotoUrls(html, vehicle = null, limit = 10) {
 function parseEdmundsVehicleFromHtml(html, pageUrl = null) {
   const entries = extractJsonLdObjects(html).flatMap(flattenGraphEntries);
   const vehicle = entries.find((entry) => entry?.["@type"] === "Vehicle");
-  if (!vehicle) {
+  const htmlFields = extractEdmundsHtmlFields(html);
+  const urlVehicle = parseEdmundsVehicleFromUrl(pageUrl) || {};
+
+  if (!vehicle && !htmlFields.title && !htmlFields.priceUsd && !htmlFields.mileage) {
     throw new Error("Не удалось найти блок данных автомобиля на странице Edmunds.");
   }
 
-  const title = vehicle.name || null;
-  const year = parseNumber(vehicle.vehicleModelDate || vehicle.productionDate);
-  const priceUsd = parseNumber(vehicle.offers?.price);
-  const mileage = parseNumber(vehicle.mileageFromOdometer?.value);
-  const horsepower = parseNumber(vehicle.vehicleEngine?.enginePower?.value);
-  const engineLiters = parseNumber(vehicle.vehicleEngine?.engineDisplacement?.value);
+  const title = vehicle?.name || htmlFields.title || urlVehicle.title || null;
+  const year = parseNumber(vehicle?.vehicleModelDate || vehicle?.productionDate) ?? urlVehicle.year;
+  const priceUsd = parseNumber(vehicle?.offers?.price) ?? htmlFields.priceUsd;
+  const mileage = parseNumber(vehicle?.mileageFromOdometer?.value) ?? htmlFields.mileage;
+  const horsepower = parseNumber(vehicle?.vehicleEngine?.enginePower?.value) ?? htmlFields.horsepower;
+  const engineLiters = parseNumber(vehicle?.vehicleEngine?.engineDisplacement?.value) ?? htmlFields.engineLiters;
   const engineCc = engineLiters ? Math.round(engineLiters * 1000) : null;
 
-  const trimFromTitle = title?.match(/^\d{4}\s+\S+\s+\S+\s+(.+)$/)?.[1] || null;
+  const inferredTrim = inferTrimFromTitle(title, {
+    year,
+    make: vehicle?.brand?.name || vehicle?.manufacturer || urlVehicle.make,
+    model: vehicle?.model || urlVehicle.model
+  });
+  const trim = vehicle?.vehicleConfiguration
+    || htmlFields.trim
+    || inferredTrim;
 
   return {
     source: "Edmunds",
     sourceUrl: pageUrl,
     title,
-    vin: vehicle.vehicleIdentificationNumber || null,
-    stockNumber: vehicle.sku || null,
+    vin: vehicle?.vehicleIdentificationNumber || urlVehicle.vin || null,
+    stockNumber: vehicle?.sku || null,
     year: year ? Math.round(year) : null,
-    make: vehicle.brand?.name || vehicle.manufacturer || null,
-    model: vehicle.model || null,
-    trim: trimFromTitle,
+    make: vehicle?.brand?.name || vehicle?.manufacturer || urlVehicle.make || null,
+    model: vehicle?.model || urlVehicle.model || null,
+    trim,
     priceUsd,
     mileage,
-    drivetrain: vehicle.driveWheelConfiguration || null,
-    transmission: vehicle.vehicleTransmission || null,
-    bodyType: vehicle.bodyType || null,
-    fuelType: vehicle.vehicleEngine?.fuelType || vehicle.vehicleEngine?.engineType || null,
+    drivetrain: vehicle?.driveWheelConfiguration || htmlFields.drivetrain || null,
+    transmission: vehicle?.vehicleTransmission || htmlFields.transmission || null,
+    bodyType: vehicle?.bodyType || null,
+    fuelType: vehicle?.vehicleEngine?.fuelType || vehicle?.vehicleEngine?.engineType || null,
     horsepower: horsepower ? Math.round(horsepower) : null,
     engineLiters,
     engineCc,
-    exteriorColor: vehicle.color || null,
-    interiorColor: vehicle.vehicleInteriorColor || null,
-    vehicleConfiguration: vehicle.vehicleConfiguration || null,
+    exteriorColor: vehicle?.color || null,
+    interiorColor: vehicle?.vehicleInteriorColor || null,
+    vehicleConfiguration: vehicle?.vehicleConfiguration || null,
     photos: extractEdmundsPhotoUrls(html, vehicle)
   };
 }
@@ -329,7 +482,16 @@ function formatImportedVehicle(vehicle) {
   } else {
     lines.push("Часть данных для расчета придется уточнить вручную.");
   }
-  lines.push("Цену, если ее не удалось прочитать, а также доставку по США и океан уточним отдельными шагами.");
+  const missingForCalculation = [];
+  if (!vehicle.priceUsd) missingForCalculation.push("цену");
+  if (!vehicle.engineCc && !vehicle.engineLiters) missingForCalculation.push("объем двигателя");
+  if (!vehicle.horsepower) missingForCalculation.push("мощность");
+  if (!vehicle.year) missingForCalculation.push("год");
+  if (missingForCalculation.length) {
+    lines.push(`Уточним вручную: ${missingForCalculation.join(", ")}, а также доставку по США и океан.`);
+  } else {
+    lines.push("Основные данные подставлены. Доставку по США и океан уточним отдельными шагами.");
+  }
   return lines.join("\n");
 }
 
@@ -431,12 +593,8 @@ async function fetchHtmlWithPlaywright(url, options = {}) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
     const html = await page.content();
-    const title = await page.title();
-
-    if (detectEdmundsAccessDenied(html, title)) {
-      throw new Error(`Playwright получил страницу блокировки: ${title || "Access Denied"}`);
-    }
-
+    // Even a blocked response can contain useful server-rendered fields.
+    // The parser decides whether the HTML has enough data to use.
     return html;
   } finally {
     await context.close().catch(() => {});
@@ -469,6 +627,16 @@ async function importEdmundsListing(url, options = {}) {
   try {
     const html = await loadEdmundsHtml(url, options);
     listingVehicle = parseEdmundsVehicleFromHtml(html, url);
+
+    if (detectEdmundsAccessDenied(html)) {
+      const missing = [];
+      if (!listingVehicle.priceUsd) missing.push("цену");
+      if (!listingVehicle.mileage) missing.push("пробег");
+      if (!listingVehicle.photos?.length) missing.push("фото");
+      if (missing.length) {
+        importWarning = `Edmunds вернул страницу с ограничением доступа, но часть данных из HTML удалось прочитать. Не удалось получить: ${missing.join(", ")}.`;
+      }
+    }
   } catch (error) {
     if (getEdmundsFetchMode(options) === "fetch") {
       const statusNote = error.status ? ` ${error.status}` : "";
