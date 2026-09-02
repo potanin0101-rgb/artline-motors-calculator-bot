@@ -260,6 +260,32 @@ const asOf = new Date("2026-05-06T12:00:00+03:00");
 }
 
 {
+  const blockedHtml = `<!DOCTYPE html>
+  <html>
+    <head><title>403 - Access Denied | Edmunds</title></head>
+    <body>
+      <h1>2023 Land Rover Range Rover Velar P250 R-Dynamic S</h1>
+      <span data-test="vdp-price-row" data-testid="vdp-price-row">$35,990</span>
+      <span data-test="vdp-mileage-row">24,781 mi.</span>
+    </body>
+  </html>`;
+  const blockedVehicle = parseEdmundsVehicleFromHtml(
+    blockedHtml,
+    "https://www.edmunds.com/land-rover/range-rover-velar/2023/vin/SALYT2EX6PA350256/?radius=50"
+  );
+
+  assert.equal(detectEdmundsAccessDenied(blockedHtml), true);
+  assert.equal(blockedVehicle.title, "2023 Land Rover Range Rover Velar P250 R-Dynamic S");
+  assert.equal(blockedVehicle.vin, "SALYT2EX6PA350256");
+  assert.equal(blockedVehicle.year, 2023);
+  assert.equal(blockedVehicle.make, "Land Rover");
+  assert.equal(blockedVehicle.model, "Range-Rover-Velar");
+  assert.equal(blockedVehicle.trim, "P250 R-Dynamic S");
+  assert.equal(blockedVehicle.priceUsd, 35990);
+  assert.equal(blockedVehicle.mileage, 24781);
+}
+
+{
   const deniedHtml = `<!DOCTYPE html><html><head><title>403 - Access Denied | Edmunds</title></head><body>
     <h1>Access Denied</h1>
     <p>Reference ID 0.e837c517.1780930562.8ea08ec5</p>
