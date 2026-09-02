@@ -191,6 +191,20 @@ function extractEdmundsHtmlFields(html) {
   };
 }
 
+function hasEdmundsVehicleData(html) {
+  const fields = extractEdmundsHtmlFields(html);
+  const hasJsonLdVehicle = extractJsonLdObjects(html)
+    .flatMap(flattenGraphEntries)
+    .some((entry) => entry?.["@type"] === "Vehicle");
+
+  return Boolean(
+    hasJsonLdVehicle
+    || fields.title
+    || fields.priceUsd !== null
+    || fields.mileage !== null
+  );
+}
+
 function inferTrimFromTitle(title, vehicle) {
   if (!title || !vehicle) return null;
 
@@ -541,14 +555,15 @@ async function fetchHtmlWithFetch(url) {
       }
     });
 
-    if (!response.ok) {
+    const html = await response.text();
+    const hasVehicleData = hasEdmundsVehicleData(html);
+    if (!response.ok && !hasVehicleData) {
       const error = new Error(`HTTP ${response.status}`);
       error.status = response.status;
       throw error;
     }
 
-    const html = await response.text();
-    if (detectEdmundsAccessDenied(html)) {
+    if (detectEdmundsAccessDenied(html) && !hasVehicleData) {
       const error = new Error("Access Denied");
       error.status = response.status;
       throw error;
