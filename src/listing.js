@@ -608,9 +608,48 @@ async function fetchHtmlWithPlaywright(url, options = {}) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => {});
     const html = await page.content();
+    const liveMarkup = [];
+    const fieldSelectors = [
+      '[data-test="vdp-price-row"]',
+      '[data-testid="vdp-price-row"]',
+      '[data-test="vdp-price"]',
+      '[data-testid="vdp-price"]',
+      '[data-test="vdp-mileage-row"]',
+      '[data-testid="vdp-mileage-row"]',
+      '[data-test="vdp-mileage"]',
+      '[data-testid="vdp-mileage"]',
+      '[data-test="vehicle-mileage"]',
+      '[data-testid="vehicle-mileage"]',
+      '[data-test="vdp-trim"]',
+      '[data-testid="vdp-trim"]',
+      '[data-test="vehicle-trim"]',
+      '[data-testid="vehicle-trim"]',
+      '[data-test="vdp-transmission"]',
+      '[data-testid="vdp-transmission"]',
+      '[data-test="vdp-drivetrain"]',
+      '[data-testid="vdp-drivetrain"]',
+      '[data-test="vdp-engine"]',
+      '[data-testid="vdp-engine"]',
+      '[data-test="vdp-horsepower"]',
+      '[data-testid="vdp-horsepower"]'
+    ];
+
+    // Read live DOM nodes as well as serialized HTML. This covers fields
+    // rendered after hydration or inside an open shadow root.
+    for (const selector of fieldSelectors) {
+      const locator = page.locator(selector).first();
+      if (await locator.count()) {
+        liveMarkup.push(await locator.evaluate((element) => element.outerHTML));
+      }
+    }
+
+    const liveImageUrls = await page.locator("img").evaluateAll((images) => images
+      .flatMap((image) => [image.currentSrc, image.src, image.getAttribute("data-src")])
+      .filter(Boolean));
+
     // Even a blocked response can contain useful server-rendered fields.
     // The parser decides whether the HTML has enough data to use.
-    return html;
+    return [html, ...liveMarkup, ...liveImageUrls].join("\n");
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
