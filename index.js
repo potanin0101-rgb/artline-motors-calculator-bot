@@ -1,9 +1,11 @@
+const path = require("node:path");
 const { loadEnvFile } = require("./src/env");
 const { calculateImport } = require("./src/calculator");
 const { formatResult, moneyUsd, vehicleHeader } = require("./src/format");
 const { formatImportedVehicle, importListingFromUrl, isSupportedListingUrl } = require("./src/listing");
 const { getRates } = require("./src/rates");
 
+loadEnvFile(path.join(__dirname, ".env"));
 loadEnvFile();
 
 const BOT_TOKEN = process.env.BOT_TOKEN
@@ -285,7 +287,9 @@ async function handleMessage(message) {
     });
 
     try {
-      const imported = await importListingFromUrl(text, { fetchMode: "auto" });
+      const imported = await importListingFromUrl(text, {
+        fetchMode: process.env.EDMUNDS_FETCH_MODE || "playwright"
+      });
       session.option = "edmunds_import";
       session.data = {
         ...imported.data
