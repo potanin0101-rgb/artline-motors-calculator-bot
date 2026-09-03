@@ -288,7 +288,7 @@ async function handleMessage(message) {
 
     try {
       const imported = await importListingFromUrl(text, {
-        fetchMode: process.env.EDMUNDS_FETCH_MODE || "playwright"
+        fetchMode: "playwright"
       });
       session.option = "edmunds_import";
       session.data = {
